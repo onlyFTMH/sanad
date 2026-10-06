@@ -22,9 +22,9 @@ export const nameIn = (code: string, ui: string) => displayName(code, ui);
 /** Font stack per language; Arabic-script text is never set in a Latin face. */
 export function fontFor(code: string): string {
   const base = code.split('-')[0];
-  if (base === 'ur') return "'Noto Nastaliq Urdu', 'Readex Pro', serif";
-  if (base === 'bn') return "'Hind Siliguri', 'Readex Pro', sans-serif";
-  return "'Readex Pro', system-ui, sans-serif";
+  if (base === 'ur') return "'Noto Nastaliq Urdu', 'Cairo', serif";
+  if (base === 'bn') return "'Hind Siliguri', 'Cairo', sans-serif";
+  return "'Cairo', 'Readex Pro', system-ui, sans-serif";
 }
 
 /** Line height per language (Nastaliq needs much more room). */
