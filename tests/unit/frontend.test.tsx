@@ -26,6 +26,7 @@ describe('interface strings', () => {
 describe('render', () => {
   it('renders the home page', () => {
     const html = renderToString(<App />);
-    expect(html).toContain('askbox');
+    expect(html).toContain('hero-section');
+    expect(html).toContain('href="#/ask"');
   });
 });
