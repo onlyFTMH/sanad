@@ -1,14 +1,15 @@
 /**
  * SANAD Full-Stack Express Server with Vite Middleware
- * Serves the SANAD RAG API (/api/ask), health checks, and the frontend
+ * Serves the Sanad answer API (/api/ask, /api/meta), health checks, and the frontend
  */
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createAskHandler } from './server/api/ask.ts';
-import { getServiceClient, isSupabaseConfigured, pingDatabase } from './server/db/index.ts';
-import { getRagDeps, isRagConfigured } from './server/rag/index.ts';
+import { accountsRouter } from './server/accounts/http.ts';
+import { createSupabaseAccountsStore } from './server/accounts/supabaseStore.ts';
+import { askHandler, createAnswerService, metaHandler } from './server/answer/http.ts';
+import { getServiceClient, isSupabaseConfigured, pingDatabase, readSupabaseEnv } from './server/db/index.ts';
 
 dotenv.config();
 
@@ -21,13 +22,17 @@ const isProd = process.env.NODE_ENV === 'production';
 
 app.use(express.json({ limit: '32kb' }));
 
+// Answer path: approved corpus + optional model (classification and selection only)
+const answerService = createAnswerService();
+
 // Server health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'SANAD Knowledge Engine',
     supabaseConfigured: isSupabaseConfigured(),
-    ragConfigured: isRagConfigured() && isSupabaseConfigured()
+    corpusLoaded: !!answerService.corpus,
+    modelConfigured: !!answerService.llm
   });
 });
 
@@ -44,9 +49,20 @@ app.get('/api/health/db', async (req, res) => {
   }
 });
 
-// Question answering: SANAD RAG pipeline (OpenAI + published Supabase content only).
-// The previous Gemini /api/chat route generated answers without retrieval and has been removed.
-app.post('/api/ask', createAskHandler(getRagDeps));
+// Question answering: approved corpus (validated content from the reference sources) + optional model
+// for understanding and selection only. No religious text is ever generated.
+app.get('/api/meta', metaHandler(answerService));
+app.post('/api/ask', askHandler(answerService));
+
+// Accounts, «أسئلتي», the association portal and admin (Supabase Auth + server-side key)
+const supabaseEnv = isSupabaseConfigured() ? readSupabaseEnv() : null;
+app.use(
+  '/api',
+  accountsRouter({
+    store: supabaseEnv ? createSupabaseAccountsStore(supabaseEnv.url, supabaseEnv.secretKey) : null,
+    publicConfig: supabaseEnv?.publishableKey ? { url: supabaseEnv.url, publishableKey: supabaseEnv.publishableKey } : null,
+  })
+);
 
 async function startServer() {
   if (!isProd) {
@@ -57,9 +73,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.use(express.static(path.resolve(process.cwd(), 'dist')));
     app.get('*', (req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
     });
   }
 

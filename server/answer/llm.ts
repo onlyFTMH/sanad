@@ -1,0 +1,145 @@
+/**
+ * The language model's narrow role (server side only):
+ *   1. understand  — the question's language, whether it is clear, personal, in scope; search keywords
+ *   2. select      — which retrieved items (by id) directly answer the question, or none
+ * It never writes religious content: its outputs are ids, labels, keywords, and — when the question
+ * is unclear — a short clarification question in the asker's language that restates their own words.
+ *
+ * Works with any OpenAI-compatible chat endpoint. Defaults to Google Gemini:
+ *   LLM_API_KEY      required to enable the model (Gemini key from aistudio.google.com)
+ *   LLM_BASE_URL     default https://generativelanguage.googleapis.com/v1beta/openai/
+ *   LLM_MODEL        default gemini-3.5-flash-lite
+ */
+import { z } from 'zod';
+
+export interface LlmSettings {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+}
+
+export function readLlmSettings(env: Record<string, string | undefined> = process.env): LlmSettings | null {
+  const apiKey = env.LLM_API_KEY?.trim() || env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+  return {
+    apiKey,
+    baseUrl: (env.LLM_BASE_URL?.trim() || 'https://generativelanguage.googleapis.com/v1beta/openai/').replace(/\/?$/, '/'),
+    model: env.LLM_MODEL?.trim() || 'gemini-3.5-flash-lite',
+    timeoutMs: Number(env.LLM_TIMEOUT_MS) || 30000,
+  };
+}
+
+/** JSON from a model, tolerating code fences and broken \\u escapes. */
+export function parseLooseJson(text: string): unknown {
+  const body = text.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '');
+  try {
+    return JSON.parse(body);
+  } catch {
+    return JSON.parse(body.replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u'));
+  }
+}
+
+export interface Llm {
+  json<T>(system: string, user: string, schema: z.ZodType<T>): Promise<T>;
+}
+
+export function createLlm(settings: LlmSettings, fetchImpl: typeof fetch = fetch, waitMs = (ms: number) => new Promise((r) => setTimeout(r, ms))): Llm {
+  async function once<T>(system: string, user: string, schema: z.ZodType<T>): Promise<T> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), settings.timeoutMs);
+    try {
+      const res = await fetchImpl(`${settings.baseUrl}chat/completions`, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey}` },
+        body: JSON.stringify({
+          model: settings.model,
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        // the provider's error message helps (unknown model, quota…); it never contains the key
+        const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 600);
+        throw new Error(`LLM HTTP ${res.status} ${detail}`);
+      }
+      const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const text = data.choices?.[0]?.message?.content ?? '';
+      const json = parseLooseJson(text);
+      return schema.parse(json);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    async json(system, user, schema) {
+      // free tiers allow only a few requests per minute: on 429 wait as asked, then retry (twice at most)
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await once(system, user, schema);
+        } catch (err) {
+          const msg = (err as Error).message;
+          // a slow first call (e.g. right after the server wakes up) is retried once
+          if (/aborted/i.test(msg) && attempt === 0) continue;
+          if (!msg.startsWith('LLM HTTP 429') || attempt >= 2) throw err;
+          const asked = /retry in ([\d.]+)s/i.exec(msg);
+          await waitMs(Math.min(30, asked ? Number(asked[1]) + 1 : 6) * 1000);
+        }
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: understand the question
+// ---------------------------------------------------------------------------
+// Models sometimes send null for an empty field or a few extra items; accept and normalise those.
+const list = (max: number) => z.array(z.string()).nullish().transform((v) => (v ?? []).filter((x) => typeof x === 'string' && x.trim()).slice(0, max));
+export const Understanding = z.object({
+  language: z.string().min(2).max(10),
+  category: z.enum(['question', 'personal_case', 'out_of_scope', 'request_human', 'greeting']),
+  clear: z.boolean().nullish().transform((v) => v ?? true),
+  clarify_question: z.string().nullish(),
+  clarify_options: list(3),
+  keywords_ar: list(8),
+  keywords_en: list(8),
+});
+export type Understanding = z.infer<typeof Understanding>;
+
+export const UNDERSTAND_SYSTEM = `You route questions for "Sanad", a service that answers people's questions about Islam ONLY with texts from approved sources (authentic hadith with their grades, published Q&A, a dictionary of Islamic terms). You never answer the question yourself.
+
+Return JSON with:
+- language: ISO 639-1 code of the language the user wrote in (e.g. "en", "ur", "bn", "fr", "id", "tr", "ar", "tl"). Romanised Urdu/Hindi counts as "ur"/"hi".
+- category:
+  "question" — a general question about Islam, its beliefs, worship, the Prophet ﷺ, hadith, Quran, ethics, terms, or a common misconception.
+  "personal_case" — asks for a ruling on the user's own or a specific person's situation (marriage, divorce, inheritance, contracts, money, medical/legal matters, "can I…", "my husband…", "I did…"), i.e. needs a fatwa from a qualified person.
+  "out_of_scope" — not about Islam or religion at all.
+  "request_human" — the user explicitly asks to talk to a person / scholar / daee.
+  "greeting" — only a greeting or thanks with no question.
+- clear: false only if the question is too vague to search (e.g. one ambiguous word, or it could mean clearly different things). Most questions are clear.
+- clarify_question / clarify_options: only when clear=false. Ask in the user's language which meaning they intend; options are 2–3 short rephrasings of THEIR question. Do not state any religious information.
+- keywords_ar: 3–8 Arabic search keywords/phrases (classical terms used in hadith and Islamic texts) for what the user asks.
+- keywords_en: 3–8 English search keywords for the same.
+Previous turns may be given; use them only to resolve what the current message refers to.`;
+
+// ---------------------------------------------------------------------------
+// Step 2: select the items that answer it
+// ---------------------------------------------------------------------------
+export const Selection = z.object({
+  selected: list(3),
+  reason: z.string().nullish(),
+});
+export type Selection = z.infer<typeof Selection>;
+
+export const SELECT_SYSTEM = `You check search results for "Sanad". You are given a user's question and numbered candidate texts from approved sources (hadith, Q&A, dictionary entries), each with an id.
+Select the ids (at most 3, best first) whose text DIRECTLY answers or addresses what the user asked. A text that only shares words with the question, or is about a different matter, must NOT be selected.
+- If the user asks what a term or concept means (including "explain X simply"), the dictionary entry for exactly that term DOES answer it. An entry about a narrower, related or different concept does NOT (e.g. "prayer of the sick" does not answer "how is the prayer performed"; "science of tawheed" is weaker than "tawheed" itself — prefer the exact term when present).
+- A published Q&A whose question is the same doubt or misconception the user raises DOES answer it, whatever language the user wrote in.
+- A hadith answers only if its text is about what was asked; do not select a hadith for a request to find a specific narration unless that exact narration is among the candidates. If none directly addresses the question, return an empty list — that is the correct answer whenever in doubt.
+Return JSON: {"selected": ["id", ...], "reason": "short reason"}. Never add, rewrite or explain religious content.`;

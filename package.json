@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
-    "start": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
+    "start": "node --max-old-space-size=320 dist-server/server.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
@@ -20,23 +20,26 @@
     "db:types:local": "tsx scripts/db/supabase-cli.ts types:local",
     "db:migrate:local": "tsx scripts/db/migrate-local.ts",
     "db:check": "tsx scripts/db/check-connection.ts",
-    "rag:embed": "tsx scripts/rag/embed-chunks.ts"
+    "ingest:dictionary": "tsx scripts/ingest/jamharah-dictionary.ts",
+    "ingest:load": "tsx scripts/ingest/load.ts",
+    "ingest:bayyinat": "tsx scripts/ingest/bayyinat.ts",
+    "ingest:hadith": "tsx scripts/ingest/jamharah-hadith.ts",
+    "corpus:build": "tsx scripts/corpus/build.ts",
+    "admin:grant": "tsx scripts/admin/grant.mts",
+    "eval:guide": "tsx scripts/eval/run-guide.mts",
+    "llm:check": "tsx scripts/eval/llm-check.mts"
   },
   "dependencies": {
-    "@fontsource/amiri-quran": "^5.3.0",
-    "@fontsource/cairo": "^5.3.0",
-    "@fontsource/cormorant-garamond": "^5.3.0",
+    "@fontsource/amiri": "^5.3.0",
     "@fontsource/hind-siliguri": "^5.3.0",
     "@fontsource/noto-nastaliq-urdu": "^5.3.0",
-    "@fontsource/noto-serif-bengali": "^5.3.0",
+    "@fontsource/readex-pro": "^5.3.0",
     "@supabase/supabase-js": "^2.117.2",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
-    "openai": "^7.27.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0",
@@ -50,11 +53,15 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
+    "linkedom": "^0.18.13",
     "pg": "^8.23.1",
     "supabase": "^2.119.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
