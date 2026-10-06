@@ -92,7 +92,7 @@ export function MyQuestions({ id }: { id?: string }) {
           <div className="ic calm"><Chat /></div>
           <h2>{t.emptyTitle}</h2>
           <p>{t.emptyBody}</p>
-          <div className="btns"><button className="btn btn-primary" onClick={() => go('/')}>{t.ask}</button></div>
+          <div className="btns"><button className="btn btn-primary" onClick={() => go('/ask')}>{t.ask}</button></div>
         </div>
       ) : (
         items.map((r) => (

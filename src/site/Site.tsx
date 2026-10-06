@@ -2,12 +2,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { nativeName } from '../i18n/languages';
 import { api, ApiError, type AnswerItem, type AskTurn, type ReferReason } from '../lib/api';
-import { signOut, takePending, useSession } from '../lib/auth';
+import { takePending, useSession } from '../lib/auth';
 import { go, usePrefs, useRoute } from '../lib/prefs';
 import { canListen, useDictation } from '../lib/speech';
 import { Dialog, LanguagePicker, SettingsDialog, Toast } from '../ui/common';
-import { Arrow, Back, Brand, Check, Globe, Info, Mic, MicOff, Next, Search, WifiOff } from '../ui/icons';
+import { Arrow, Back, Check, Globe, Info, Mic, MicOff, Next, Search, WifiOff } from '../ui/icons';
 import { AnswerView } from './AnswerView';
+import { Landing, SiteFooter, SiteHeader } from './Landing';
 import { MyQuestions } from './MyQuestions';
 import { ReferForm, type ReferRequest } from './Refer';
 
@@ -21,28 +22,6 @@ type View =
   | { k: 'error'; q: string; busy: boolean }
   | { k: 'mic' }
   | { k: 'sent'; reference: string };
-
-function Header({ onSettings }: { onSettings(): void }) {
-  const { t, ui, uiAuto } = usePrefs();
-  const { session } = useSession();
-  return (
-    <header className="top">
-      <div className="wrap">
-        <Brand />
-        <span className="spacer" />
-        <button className="pill" onClick={onSettings} aria-label={t.setTitle}>
-          <Globe width={18} /> <span>{uiAuto && ui === 'en' ? 'Language' : nativeName(ui)}</span>
-        </button>
-        <a className="link hide-sm" href="#/my">{t.myQ}</a>
-        {session ? (
-          <button className="btn btn-dark" onClick={() => void signOut()}>{t.signOut}</button>
-        ) : (
-          <a className="btn btn-dark" href="#/my">{t.signIn}</a>
-        )}
-      </div>
-    </header>
-  );
-}
 
 function Home({ initial, onAsk, onMicUnsupported, languages }: { initial: string; onAsk(q: string): void; onMicUnsupported(): void; languages: string[] }) {
   const { t, answerLang, setAnswerLang, ui } = usePrefs();
@@ -177,12 +156,17 @@ export function Site() {
     if (!session) return;
     const pending = takePending();
     if (!pending) return;
-    go('/');
+    go('/ask');
     api
       .sendReferral(pending)
       .then((r) => setView({ k: 'sent', reference: r.reference }))
       .catch(() => setView({ k: 'refer', req: { question: pending.question, language: pending.language, reason: (pending.reason as ReferReason) ?? 'user_request', context: pending.context } }));
   }, [session]);
+  // leaving the ask page ends the current question; coming back starts a fresh one
+  const page = route[0];
+  useEffect(() => {
+    if (page !== 'ask') setView((v) => (v.k === 'loading' ? v : { k: 'home' }));
+  }, [page]);
   useEffect(() => {
     api.meta().then((m) => setLanguages(Object.keys(m.languages))).catch(() => undefined);
   }, []);
@@ -191,7 +175,7 @@ export function Site() {
     async (q: string, extra: { history?: AskTurn[]; clarifications?: number } = {}) => {
       setDraft(q);
       setView({ k: 'loading', q });
-      go('/');
+      go('/ask');
       try {
         const r = await api.ask({ question: q, uiLanguage: ui, language: answerLang ?? undefined, ...extra });
         prefs.follow(r.language);
@@ -213,6 +197,7 @@ export function Site() {
 
   let body: React.ReactNode;
   if (route[0] === 'my') body = <MyQuestions id={route[1]} />;
+  else if (route[0] !== 'ask') body = <Landing />;
   else if (view.k === 'home') body = <Home initial={draft} onAsk={ask} onMicUnsupported={() => setView({ k: 'mic' })} languages={languages} />;
   else if (view.k === 'loading')
     body = (
@@ -277,12 +262,13 @@ export function Site() {
       </State>
     );
 
-  const showBack = route[0] !== 'my' && view.k !== 'home' && view.k !== 'loading';
+  const showBack = route[0] === 'ask' && view.k !== 'home' && view.k !== 'loading';
+  const active = route[0] === 'my' ? 'my' : route[0] === 'ask' ? 'ask' : 'home';
   return (
     <>
       <a className="skip" href="#main">{t.skip}</a>
-      <Header onSettings={() => setSettings(true)} />
-      <main id="main">
+      <SiteHeader active={active} onSettings={() => setSettings(true)} />
+      <main id="main" className={active === 'home' ? 'is-landing' : undefined}>
         {showBack && (
           <div className="wrap" style={{ marginBottom: 8 }}>
             <button className="link" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, paddingInlineStart: 0 }} onClick={() => setView({ k: 'home' })}>
@@ -292,6 +278,7 @@ export function Site() {
         )}
         {body}
       </main>
+      <SiteFooter />
       {settings && <SettingsDialog onClose={() => setSettings(false)} available={languages} />}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>
